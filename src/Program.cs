@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Windows 11 taskbar widget for Codex quota and task status")]
 [assembly: System.Reflection.AssemblyCompany("Klee")]
 [assembly: System.Reflection.AssemblyProduct("Klee Codex Quota Widget")]
-[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.1.0")]
 
 namespace KleeCodexQuotaWidget
 {
@@ -43,6 +43,90 @@ namespace KleeCodexQuotaWidget
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new QuotaForm());
             }
+        }
+    }
+
+    internal sealed class ScaleSlider : Control
+    {
+        private int value = 100;
+        public event EventHandler ValueChanged;
+        public int Value { get { return value; } set {
+            int next = Math.Max(50, Math.Min(200,value));
+            if (this.value == next) return;
+            this.value = next; Invalidate();
+            if (ValueChanged != null) ValueChanged(this,EventArgs.Empty);
+        } }
+        public ScaleSlider()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
+            TabStop = true; AccessibleRole = AccessibleRole.Slider;
+        }
+        private void SetFromX(int x) { Value = 50 + (int)Math.Round(150.0 * (x-12) / Math.Max(1,Width-24)); }
+        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if(e.Button==MouseButtons.Left) { Focus(); Capture=true; SetFromX(e.X); } }
+        protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if(Capture) SetFromX(e.X); }
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if(e.Button==MouseButtons.Left) Capture=false; }
+        protected override bool IsInputKey(Keys keyData) { return keyData==Keys.Left || keyData==Keys.Right || keyData==Keys.Home || keyData==Keys.End || base.IsInputKey(keyData); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if(e.KeyCode==Keys.Left) Value--; else if(e.KeyCode==Keys.Right) Value++;
+            else if(e.KeyCode==Keys.Home) Value=50; else if(e.KeyCode==Keys.End) Value=200;
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g=e.Graphics; g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int y=Height/2; float x=12+(Width-24)*(Value-50)/150f;
+            using(var track=new Pen(BackColor.R>128 ? Color.FromArgb(200,200,200) : Color.FromArgb(85,85,85),4))
+            using(var fill=new Pen(Color.FromArgb(80,160,245),4))
+            using(var thumb=new SolidBrush(Color.FromArgb(100,180,255)))
+            {
+                track.StartCap=track.EndCap=fill.StartCap=fill.EndCap=System.Drawing.Drawing2D.LineCap.Round;
+                g.DrawLine(track,12,y,Width-12,y); g.DrawLine(fill,12,y,x,y);
+                g.FillEllipse(thumb,x-7,y-7,14,14);
+            }
+            if(Focused) ControlPaint.DrawFocusRectangle(g,ClientRectangle);
+        }
+    }
+
+    internal sealed class WidgetMenuRenderer : ToolStripProfessionalRenderer
+    {
+        private readonly bool light;
+        public WidgetMenuRenderer(bool light) { this.light = light; RoundedEdges = true; }
+        [DllImport("dwmapi.dll")]
+        internal static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+        {
+            e.Graphics.Clear(e.ToolStrip.BackColor);
+        }
+        protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected || !e.Item.Enabled) return;
+            var rect = new Rectangle(2, 1, e.Item.Width - 4, e.Item.Height - 2);
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+            using (var brush = new SolidBrush(light ? Color.FromArgb(233,233,233) : Color.FromArgb(58,58,58)))
+            {
+                int d = 8;
+                path.AddArc(rect.Left, rect.Top, d,d,180,90);
+                path.AddArc(rect.Right-d, rect.Top,d,d,270,90);
+                path.AddArc(rect.Right-d, rect.Bottom-d,d,d,0,90);
+                path.AddArc(rect.Left, rect.Bottom-d,d,d,90,90);
+                path.CloseFigure();
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.FillPath(brush,path);
+            }
+        }
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            using (var pen = new Pen(light ? Color.FromArgb(225,225,225) : Color.FromArgb(65,65,65)))
+                e.Graphics.DrawLine(pen, 10, e.Item.Height/2, e.Item.Width-10, e.Item.Height/2);
+        }
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+            using (var pen = new Pen(light ? Color.FromArgb(220,220,220) : Color.FromArgb(70,70,70)))
+                e.Graphics.DrawRectangle(pen,0,0,e.ToolStrip.Width-1,e.ToolStrip.Height-1);
         }
     }
 
@@ -170,10 +254,18 @@ namespace KleeCodexQuotaWidget
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 
             menu = new ContextMenuStrip();
-            menu.Items.Add("立即刷新", null, delegate { ForceRefresh(); });
+            menu.Font = new Font("Segoe UI", 10f);
+            menu.Padding = new Padding(8);
+            menu.ShowImageMargin = false;
+            menu.ShowCheckMargin = true;
+            menu.Items.Add(new ToolStripMenuItem("CODEX  ·  额度监控") { Enabled = false });
             freshnessItem = new ToolStripMenuItem("尚未取得服务器数据");
             freshnessItem.Enabled = false;
             menu.Items.Add(freshnessItem);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripControlHost(BuildScaleControl()) { Margin = Padding.Empty, Padding = Padding.Empty });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("↻   立即刷新", null, delegate { ForceRefresh(); });
             var displays = new ToolStripMenuItem("显示位置");
             using (var key = Registry.CurrentUser.OpenSubKey(SettingsKey))
                 monitorDevice = key == null ? null : key.GetValue("MonitorDevice") as string;
@@ -189,7 +281,6 @@ namespace KleeCodexQuotaWidget
                 });
             }
             menu.Items.Add(displays);
-            menu.Items.Add("界面缩放…", null, delegate { ShowScaleControl(); });
             menu.Items.Add("查看 Tibo 监控源", null, delegate { OpenUrl("https://codexreset.org/zh/"); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("恢复左下角位置", null, delegate { leftOffset = DefaultLeftOffset; SaveLeftOffset(); AttachAndPosition(); });
@@ -199,7 +290,20 @@ namespace KleeCodexQuotaWidget
             menu.Items.Add(startupItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, delegate { Close(); });
-            menu.Opening += delegate { UpdateFreshnessText(); };
+            foreach (ToolStripItem item in menu.Items)
+                if (item is ToolStripMenuItem) item.Padding = new Padding(10, 6, 10, 6);
+            menu.Opening += delegate { UpdateFreshnessText(); ApplyTheme(); StyleMenu(menu); startupItem.Checked = IsStartupEnabled(); };
+            menu.Closing += delegate(object sender, ToolStripDropDownClosingEventArgs e) {
+                if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && menu.GetItemAt(menu.PointToClient(Cursor.Position)) is ToolStripControlHost)
+                    e.Cancel = true;
+            };
+            menu.Closed += delegate {
+                try { using (var key = Registry.CurrentUser.CreateSubKey(SettingsKey))
+                    key.SetValue("ScalePercent", userScalePercent, RegistryValueKind.DWord); } catch { }
+            };
+            menu.Opened += delegate {
+                try { int corner = 2; WidgetMenuRenderer.DwmSetWindowAttribute(menu.Handle, 33, ref corner, 4); } catch { }
+            };
             logoInput.ContextMenuStrip = menu;
 
             uiTimer = new System.Windows.Forms.Timer();
@@ -681,7 +785,40 @@ namespace KleeCodexQuotaWidget
             if (parsed.ResetCreditsAvailable != 3 || parsed.Weekly.Remaining != 18) throw new Exception("Reset credit parser failed");
             VerifyPriorityAndAlpha(output);
             VerifyCustomScale(output);
+            VerifyMenu(output);
             File.WriteAllText(Path.Combine(output, "result.txt"), "PASS: task states, unchanged quota animation pixels, priority matrix, threshold boundaries, future dates, stale data, recovery once, alpha surface, theme and DPI rendering, app-server parser");
+        }
+
+        private void VerifyMenu(string output)
+        {
+            UpdateFreshnessText();
+            for (int theme = 0; theme < 2; theme++)
+            {
+                background = theme == 0 ? Color.FromArgb(32,32,32) : Color.FromArgb(243,243,243);
+                StyleMenu(menu);
+                menu.Show(new Point(80,80));
+                Application.DoEvents();
+                foreach (ToolStripItem item in menu.Items)
+                {
+                    var host = item as ToolStripControlHost;
+                    if (host == null) continue;
+                    foreach (Control child in host.Control.Controls)
+                    {
+                        var slider = child as ScaleSlider;
+                        if (slider == null) continue;
+                        int original = slider.Value;
+                        slider.Value = 80;
+                        if (userScalePercent != 80 || !menu.Visible) throw new Exception("Inline scale failed");
+                        slider.Value = original;
+                    }
+                }
+                using (var bitmap = new Bitmap(menu.Width,menu.Height))
+                {
+                    menu.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
+                    bitmap.Save(Path.Combine(output,"menu-"+theme+".png"));
+                }
+                menu.Close();
+            }
         }
 
         private void VerifyCustomScale(string output)
@@ -830,7 +967,7 @@ namespace KleeCodexQuotaWidget
             int age = Math.Max(0, (int)(DateTimeOffset.Now - snapshot.RefreshedAt).TotalSeconds);
             string suffix = String.IsNullOrEmpty(snapshot.Error) ? "服务器实值" : "连接失败，保留上次实值";
             freshnessItem.Text = String.Format(CultureInfo.InvariantCulture,
-                "更新于 {0:HH:mm:ss} · {1}秒前 · {2}", snapshot.RefreshedAt.LocalDateTime, age, suffix);
+                "{2} · {0:HH:mm:ss}", snapshot.RefreshedAt.LocalDateTime, age, suffix);
         }
 
         private async void PollTibo()
@@ -1183,51 +1320,51 @@ namespace KleeCodexQuotaWidget
                 Math.Max(1, barWidth - 16) / (float)logicalWidth)));
         }
 
-        private void ShowScaleControl()
+        private Control BuildScaleControl()
         {
-            using (var dialog = new Form())
-            using (var slider = new TrackBar())
-            using (var label = new Label())
-            using (var reset = new Button())
+            var panel = new Panel { Size = new Size(290, 106), Margin = Padding.Empty };
+            var label = new Label { Text = "界面缩放   " + userScalePercent + "%", AutoSize = false };
+            label.SetBounds(12, 8, 180, 26);
+            var slider = new ScaleSlider { Value = userScalePercent,
+                AccessibleName = "界面缩放百分比" };
+            slider.SetBounds(8, 38, 272, 32);
+            var reset = new Button { Text = "恢复默认", FlatStyle = FlatStyle.Flat, TabStop = true };
+            reset.FlatAppearance.BorderSize = 0;
+            reset.SetBounds(204, 6, 80, 28);
+            var hint = new Label { Text = "50%  –  200%  ·  自动适配任务栏", AutoSize = false };
+            hint.SetBounds(12, 78, 270, 22);
+            slider.ValueChanged += delegate {
+                userScalePercent = slider.Value;
+                label.Text = "界面缩放   " + userScalePercent + "%";
+                AttachAndPosition();
+            };
+            reset.Click += delegate { slider.Value = 100; };
+            panel.Controls.AddRange(new Control[] { label, slider, reset, hint });
+            return panel;
+        }
+
+        private void StyleMenu(ToolStrip strip)
+        {
+            bool light = background.R > 128;
+            strip.BackColor = light ? Color.FromArgb(250,250,250) : Color.FromArgb(36,36,36);
+            strip.ForeColor = light ? Color.FromArgb(32,32,32) : Color.FromArgb(240,240,240);
+            strip.Renderer = new WidgetMenuRenderer(light);
+            foreach (ToolStripItem item in strip.Items)
             {
-                dialog.Text = "界面缩放";
-                dialog.Font = new Font("Segoe UI", 10f);
-                dialog.AutoScaleMode = AutoScaleMode.Dpi;
-                dialog.ClientSize = new Size(360, 170);
-                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dialog.MaximizeBox = false;
-                dialog.MinimizeBox = false;
-                dialog.ShowInTaskbar = false;
-                dialog.TopMost = true;
-                dialog.StartPosition = FormStartPosition.Manual;
-                Rectangle work = Screen.FromHandle(Handle).WorkingArea;
-                dialog.Location = new Point(Math.Max(work.Left, Math.Min(Left, work.Right - dialog.Width)),
-                    Math.Max(work.Top, work.Bottom - dialog.Height - 8));
-                label.SetBounds(20, 16, 320, 46);
-                slider.SetBounds(16, 66, 328, 45);
-                slider.Minimum = 50; slider.Maximum = 200;
-                slider.TickFrequency = 25; slider.SmallChange = 1; slider.LargeChange = 10;
-                slider.Value = userScalePercent;
-                slider.AccessibleName = "界面缩放百分比";
-                reset.Text = "恢复默认";
-                reset.SetBounds(230, 120, 110, 32);
-                Action updateLabel = delegate {
-                    label.Text = "缩放：" + userScalePercent + "%\n跟随系统 DPI；过大时自动适配任务栏";
-                };
-                slider.ValueChanged += delegate {
-                    userScalePercent = slider.Value;
-                    AttachAndPosition();
-                    updateLabel();
-                };
-                reset.Click += delegate { slider.Value = 100; };
-                dialog.FormClosed += delegate {
-                    try { using (var key = Registry.CurrentUser.CreateSubKey(SettingsKey))
-                        key.SetValue("ScalePercent", userScalePercent, RegistryValueKind.DWord); }
-                    catch { }
-                };
-                updateLabel();
-                dialog.Controls.AddRange(new Control[] { label, slider, reset });
-                dialog.ShowDialog();
+                item.ForeColor = strip.ForeColor;
+                var host = item as ToolStripControlHost;
+                if (host != null)
+                {
+                    host.Control.BackColor = strip.BackColor;
+                    host.Control.ForeColor = strip.ForeColor;
+                    foreach (Control child in host.Control.Controls)
+                    {
+                        child.BackColor = strip.BackColor;
+                        child.ForeColor = strip.ForeColor;
+                    }
+                }
+                var entry = item as ToolStripMenuItem;
+                if (entry != null && entry.HasDropDownItems) StyleMenu(entry.DropDown);
             }
         }
 

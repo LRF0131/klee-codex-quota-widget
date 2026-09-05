@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 - 2026-09-05
+
+- Embed a live scale slider and reset button directly in the right-click menu.
+- Add theme-aware menu colors, rounded hover highlights and grouped controls.
+- Preserve the menu while adjusting scale; save when it closes.
+
 ## 1.4.0 - 2026-09-05
 
 - Add a live 50%–200% UI scale slider with keyboard control, reset and saved preferences.
