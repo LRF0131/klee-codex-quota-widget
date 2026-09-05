@@ -1,0 +1,24 @@
+# Build and release output
+dist/
+release/
+packaging/SHA256.txt
+
+# Local IDE and compiler output
+.vs/
+.vscode/
+bin/
+obj/
+*.user
+*.suo
+*.pdb
+
+# Local runtime data and credentials (never commit)
+.codex/
+auth.json
+usage-cache.json
+*.log
+
+# Windows files
+Thumbs.db
+Desktop.ini
+*.lnk
