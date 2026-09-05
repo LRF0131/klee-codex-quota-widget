@@ -69,18 +69,29 @@ The separate Logo input layer uses `1/255` alpha so gaps inside the mark are sti
 
 ## Right-side status rules
 
-Only one right-side status is shown at a time.
+Only one right-side status is shown at a time. These are the most common quota combinations:
 
-| Priority | Condition | Example |
-| ---: | --- | --- |
-| 1 | A substantial quota recovery is confirmed | `额度已恢复` (quota recovered), green for five minutes |
-| 2 | `7d = 0%` and earned resets are available | `可重置 ×2` (2 resets available) |
-| 2 | `7d = 0%` and no reset is available or the count is unknown | `7d 09-08 14:35恢复` when a reliable time exists |
-| 3 | Tibo clearly announces a specific future reset time | `Tibo 01:26:18` |
-| 4 | `5h < 10%` while `7d > 0%` | `5h 14:35恢复`, or `5h 明天00:35恢复` for tomorrow |
-| 5 | Anything else | No extra text |
+| 5h | 7d | Reset credits | Right-side status |
+| ---: | ---: | ---: | --- |
+| 50% | 80% | 0 | Empty |
+| 8% | 80% | 0 | `5h 14:35恢复` |
+| 8% | 15% | 2 | `5h 14:35恢复` |
+| 8% | 1% | 2 | `5h 14:35恢复` |
+| 8% | 0% | 2 | `可重置 ×2` |
+| 8% | 0% | 0 | `7d 09-08 14:35恢复` |
+| 50% | 0% | 2 | `可重置 ×2` |
+| 50% | 0% | 0 | `7d 09-08 14:35恢复` |
 
-Additional rules:
+Recovery times in the table are format examples. They appear only when the server provides a reliable timestamp that is still in the future.
+
+Two temporary statuses may also appear:
+
+- After a substantial quota increase is confirmed, `额度已恢复` (quota recovered) appears in green for five minutes.
+- When Tibo clearly announces a specific future reset time, the widget shows `Tibo 01:26:18`. It shows no Tibo status without a clear announcement.
+
+The effective priority is: `额度已恢复` → zero-`7d` status → Tibo countdown → low-`5h` recovery time → empty.
+
+Detailed rules:
 
 - Exactly `5h = 10%` does not trigger a recovery-time message.
 - Earned reset counts stay hidden while 7-day quota is still above zero.
