@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Windows 11 taskbar widget for Codex quota and task status")]
 [assembly: System.Reflection.AssemblyCompany("Klee")]
 [assembly: System.Reflection.AssemblyProduct("Klee Codex Quota Widget")]
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
 
 namespace KleeCodexQuotaWidget
 {
@@ -127,6 +127,7 @@ namespace KleeCodexQuotaWidget
         private bool wasStale;
         private string paintedRightStatus;
         private float displayScale = 1f;
+        private int userScalePercent = 100;
         private string monitorDevice;
         private CodexTaskState taskState = CodexTaskState.Hidden;
         private int spinnerAngle;
@@ -146,6 +147,12 @@ namespace KleeCodexQuotaWidget
         public QuotaForm()
         {
             leftOffset = ReadLeftOffset();
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(SettingsKey))
+                    if (key != null) userScalePercent = Math.Max(50, Math.Min(200, Convert.ToInt32(key.GetValue("ScalePercent", 100))));
+            }
+            catch { userScalePercent = 100; }
             using (var stream = typeof(QuotaForm).Assembly.GetManifestResourceStream("CodexKnot.png"))
             using (var source = Image.FromStream(stream))
                 knotLogo = new Bitmap(source);
@@ -182,6 +189,7 @@ namespace KleeCodexQuotaWidget
                 });
             }
             menu.Items.Add(displays);
+            menu.Items.Add("界面缩放…", null, delegate { ShowScaleControl(); });
             menu.Items.Add("查看 Tibo 监控源", null, delegate { OpenUrl("https://codexreset.org/zh/"); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("恢复左下角位置", null, delegate { leftOffset = DefaultLeftOffset; SaveLeftOffset(); AttachAndPosition(); });
@@ -672,7 +680,44 @@ namespace KleeCodexQuotaWidget
             var parsed = CodexRateLimitReader.ParseForVerification("{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":25,\"windowDurationMins\":300},\"secondary\":{\"usedPercent\":82,\"windowDurationMins\":10080}},\"rateLimitResetCredits\":{\"availableCount\":3,\"credits\":[]}}}");
             if (parsed.ResetCreditsAvailable != 3 || parsed.Weekly.Remaining != 18) throw new Exception("Reset credit parser failed");
             VerifyPriorityAndAlpha(output);
+            VerifyCustomScale(output);
             File.WriteAllText(Path.Combine(output, "result.txt"), "PASS: task states, unchanged quota animation pixels, priority matrix, threshold boundaries, future dates, stale data, recovery once, alpha surface, theme and DPI rendering, app-server parser");
+        }
+
+        private void VerifyCustomScale(string output)
+        {
+            tiboEvent = null; deliveredUntil = null;
+            snapshot.RefreshedAt = DateTimeOffset.Now;
+            snapshot.FiveHour.Remaining = 8; snapshot.Weekly.Remaining = 0;
+            snapshot.ResetCreditsAvailable = 0;
+            snapshot.Weekly.ResetsAt = DateTimeOffset.Now.AddDays(3);
+            taskState = CodexTaskState.Running;
+            foreach (float dpi in new float[] { 1f, 1.25f, 1.5f, 2f, 3f })
+            foreach (int percent in new int[] { 50, 75, 100, 125, 150, 200 })
+            {
+                displayScale = FitScale(dpi, percent, 1280, (int)(48 * dpi), GetLogicalWidth());
+                RebuildFrame(false);
+                if (frame.Height > (int)(48 * dpi) - 4 || frame.Width > 1264)
+                    throw new Exception("Scale exceeds taskbar bounds");
+                using (var before = (Bitmap)frame.Clone())
+                {
+                    AnimationTick(null, EventArgs.Empty);
+                    int changed = 0;
+                    for (int y = 0; y < frame.Height; y++)
+                    for (int x = 0; x < frame.Width; x++)
+                    {
+                        if (before.GetPixel(x,y) != frame.GetPixel(x,y))
+                        {
+                            changed++;
+                            if (x >= (int)Math.Ceiling(30 * displayScale)) throw new Exception("Scaled animation changed text");
+                        }
+                        if (x >= frame.Width - 2 && frame.GetPixel(x,y).A != 0) throw new Exception("Scaled text clipped");
+                    }
+                    if (changed == 0) throw new Exception("Scaled logo did not animate");
+                }
+                frame.Save(Path.Combine(output, "custom-" + dpi.ToString(CultureInfo.InvariantCulture) + "-" + percent + ".png"));
+            }
+            displayScale = 1f;
         }
 
         private void VerifyPriorityAndAlpha(string output)
@@ -753,6 +798,7 @@ namespace KleeCodexQuotaWidget
             Rectangle area = new Rectangle(4, 0, StatusExtraWidth + 2, WidgetHeight);
             using (Graphics graphics = Graphics.FromImage(frame))
             {
+                graphics.ScaleTransform(displayScale, displayScale);
                 graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
                 using (var brush = new SolidBrush(Color.Transparent)) graphics.FillRectangle(brush, area);
                 graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
@@ -862,10 +908,13 @@ namespace KleeCodexQuotaWidget
         private void RebuildFrame(bool requestPaint)
         {
             if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
-            var next = new Bitmap(GetLogicalWidth(), WidgetHeight,
+            var next = new Bitmap(Math.Max(1, (int)Math.Round(GetLogicalWidth() * displayScale)), Math.Max(1, (int)Math.Round(WidgetHeight * displayScale)),
                 System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
             using (Graphics graphics = Graphics.FromImage(next))
+            {
+                graphics.ScaleTransform(displayScale, displayScale);
                 PaintFrame(graphics);
+            }
             Bitmap previous = frame;
             frame = next;
             if (previous != null) previous.Dispose();
@@ -876,16 +925,7 @@ namespace KleeCodexQuotaWidget
         private void PresentFrame()
         {
             if (frame == null || !IsHandleCreated || !Visible) return;
-            using (var scaled = new Bitmap(Math.Max(1, (int)Math.Round(frame.Width * displayScale)),
-                Math.Max(1, (int)Math.Round(frame.Height * displayScale)), System.Drawing.Imaging.PixelFormat.Format32bppPArgb))
-            {
-                using (Graphics g = Graphics.FromImage(scaled))
-                {
-                    g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
-                    g.DrawImage(frame, new Rectangle(0, 0, scaled.Width, scaled.Height));
-                }
-                AlphaWindow.Present(Handle, scaled, Left, Top);
-            }
+            AlphaWindow.Present(Handle, frame, Left, Top);
         }
 
         private void PaintFrame(Graphics graphics)
@@ -1109,6 +1149,7 @@ namespace KleeCodexQuotaWidget
             if (!barVisible) { logoInput.Hide(); return; }
             float scale = 1f;
             try { scale = Math.Max(1f, NativeMethods.GetDpiForWindow(current) / 96f); } catch { }
+            scale = FitScale(scale, userScalePercent, barBounds.Width, barBounds.Height, GetLogicalWidth());
             if (displayScale != scale)
             {
                 displayScale = scale;
@@ -1133,6 +1174,61 @@ namespace KleeCodexQuotaWidget
                     NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
             }
             logoInput.Position(Handle, wantedX, wantedY, (int)Math.Round(30 * displayScale), Height);
+        }
+
+        private static float FitScale(float dpiScale, int percent, int barWidth, int barHeight, int logicalWidth)
+        {
+            float requested = dpiScale * Math.Max(50, Math.Min(200, percent)) / 100f;
+            return Math.Max(0.01f, Math.Min(requested, Math.Min(Math.Max(1, barHeight - 4) / (float)WidgetHeight,
+                Math.Max(1, barWidth - 16) / (float)logicalWidth)));
+        }
+
+        private void ShowScaleControl()
+        {
+            using (var dialog = new Form())
+            using (var slider = new TrackBar())
+            using (var label = new Label())
+            using (var reset = new Button())
+            {
+                dialog.Text = "界面缩放";
+                dialog.Font = new Font("Segoe UI", 10f);
+                dialog.AutoScaleMode = AutoScaleMode.Dpi;
+                dialog.ClientSize = new Size(360, 170);
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.MaximizeBox = false;
+                dialog.MinimizeBox = false;
+                dialog.ShowInTaskbar = false;
+                dialog.TopMost = true;
+                dialog.StartPosition = FormStartPosition.Manual;
+                Rectangle work = Screen.FromHandle(Handle).WorkingArea;
+                dialog.Location = new Point(Math.Max(work.Left, Math.Min(Left, work.Right - dialog.Width)),
+                    Math.Max(work.Top, work.Bottom - dialog.Height - 8));
+                label.SetBounds(20, 16, 320, 46);
+                slider.SetBounds(16, 66, 328, 45);
+                slider.Minimum = 50; slider.Maximum = 200;
+                slider.TickFrequency = 25; slider.SmallChange = 1; slider.LargeChange = 10;
+                slider.Value = userScalePercent;
+                slider.AccessibleName = "界面缩放百分比";
+                reset.Text = "恢复默认";
+                reset.SetBounds(230, 120, 110, 32);
+                Action updateLabel = delegate {
+                    label.Text = "缩放：" + userScalePercent + "%\n跟随系统 DPI；过大时自动适配任务栏";
+                };
+                slider.ValueChanged += delegate {
+                    userScalePercent = slider.Value;
+                    AttachAndPosition();
+                    updateLabel();
+                };
+                reset.Click += delegate { slider.Value = 100; };
+                dialog.FormClosed += delegate {
+                    try { using (var key = Registry.CurrentUser.CreateSubKey(SettingsKey))
+                        key.SetValue("ScalePercent", userScalePercent, RegistryValueKind.DWord); }
+                    catch { }
+                };
+                updateLabel();
+                dialog.Controls.AddRange(new Control[] { label, slider, reset });
+                dialog.ShowDialog();
+            }
         }
 
         private void OnWidgetMouseDown(object sender, MouseEventArgs e)

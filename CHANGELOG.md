@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0 - 2026-09-05
+
+- Add a live 50%–200% UI scale slider with keyboard control, reset and saved preferences.
+- Render text directly at the target resolution instead of enlarging a low-resolution bitmap.
+- Fit scaling to taskbar bounds and scale the Logo input area consistently.
+- Verify 30 DPI/custom-scale combinations, clipping and unchanged text during animation.
+
 ## 1.3.0 - 2026-09-05
 
 - Add future recovery times for 5h below 10% and exhausted weekly quota.

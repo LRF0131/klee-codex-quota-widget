@@ -62,6 +62,7 @@ Only the Logo area receives mouse input:
 
 - Drag the Logo to move the widget horizontally along the taskbar.
 - Double-click the Logo to refresh quota and monitor state immediately.
+- Right-click the Logo → **界面缩放** (UI scale): drag the slider for a live 50%–200% adjustment, use arrow keys for fine control, or reset to 100%. Closing the panel saves the setting for next launch. Scaling follows system DPI and is capped to fit the taskbar; the Logo hit area scales with it.
 - Right-click the Logo for refresh, monitor source, display, position, startup, and exit options.
 - Text and all other transparent areas pass mouse input through to the taskbar below.
 
