@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 - 2026-09-05
+
+- Add future recovery times for 5h below 10% and exhausted weekly quota.
+- Show reset credits only at 7d = 0%; prioritize weekly exhaustion over Tibo.
+- Prevent unchanged quota from triggering recovery and prevent repeated extension.
+- Replace the opaque rectangle with a per-pixel alpha display and grayscale text.
+- Move drag, double-click refresh and context menu to a separate Logo hit region.
+- Cache recovery timestamps and add priority, alpha and DPI rendering checks.
+
 ## 1.2.0 - 2026-09-05
 
 - Show `可重置 ×N` only when 7-day remaining quota is below 20% and the

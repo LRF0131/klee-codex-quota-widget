@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Windows 11 taskbar widget for Codex quota and task status")]
 [assembly: System.Reflection.AssemblyCompany("Klee")]
 [assembly: System.Reflection.AssemblyProduct("Klee Codex Quota Widget")]
-[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
 
 namespace KleeCodexQuotaWidget
 {
@@ -139,6 +139,7 @@ namespace KleeCodexQuotaWidget
         private readonly Font mainFont;
         private readonly Font smallFont;
         private Bitmap frame;
+        private readonly LogoInputWindow logoInput = new LogoInputWindow();
         private Color background;
         private Color foreground;
 
@@ -191,7 +192,7 @@ namespace KleeCodexQuotaWidget
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, delegate { Close(); });
             menu.Opening += delegate { UpdateFreshnessText(); };
-            ContextMenuStrip = menu;
+            logoInput.ContextMenuStrip = menu;
 
             uiTimer = new System.Windows.Forms.Timer();
             uiTimer.Interval = 250;
@@ -201,10 +202,10 @@ namespace KleeCodexQuotaWidget
             animationTimer.Interval = 33;
             animationTimer.Tick += AnimationTick;
 
-            MouseDown += OnWidgetMouseDown;
-            MouseMove += OnWidgetMouseMove;
-            MouseUp += OnWidgetMouseUp;
-            MouseDoubleClick += delegate { ForceRefresh(); };
+            logoInput.MouseDown += OnWidgetMouseDown;
+            logoInput.MouseMove += OnWidgetMouseMove;
+            logoInput.MouseUp += OnWidgetMouseUp;
+            logoInput.MouseDoubleClick += delegate { ForceRefresh(); };
         }
 
         protected override bool ShowWithoutActivation { get { return true; } }
@@ -216,7 +217,7 @@ namespace KleeCodexQuotaWidget
                 const int WS_EX_TOOLWINDOW = 0x00000080;
                 const int WS_EX_NOACTIVATE = 0x08000000;
                 var cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+                cp.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | 0x00080000 | 0x00000020;
                 return cp;
             }
         }
@@ -241,6 +242,7 @@ namespace KleeCodexQuotaWidget
             mainFont.Dispose();
             smallFont.Dispose();
             knotLogo.Dispose();
+            logoInput.Dispose();
             if (frame != null) frame.Dispose();
             menu.Dispose();
             animationTimer.Dispose();
@@ -276,11 +278,7 @@ namespace KleeCodexQuotaWidget
                 PollTibo();
             if (tiboEvent != null && now > tiboEvent.TargetAt.AddHours(2))
                 tiboEvent = null;
-            if (deliveredUntil.HasValue && now > deliveredUntil.Value)
-            {
-                deliveredUntil = null;
-                tiboEvent = null;
-            }
+            if (deliveredUntil.HasValue && now > deliveredUntil.Value) deliveredUntil = null;
             UpdateWidth();
             // A visible Tibo countdown is the only right-side status that changes every second.
             // Avoid repainting static quota text continuously, which can flicker on the taskbar.
@@ -593,6 +591,7 @@ namespace KleeCodexQuotaWidget
         internal void VerifyStatus(string output)
         {
             Directory.CreateDirectory(output);
+            snapshot = new UsageSnapshot();
             ApplyTheme();
             snapshot.FiveHour.Remaining = 76;
             snapshot.Weekly.Remaining = 42;
@@ -644,19 +643,20 @@ namespace KleeCodexQuotaWidget
             if (ReadStateEvent("{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\"}}", "test") != "interrupted") throw new Exception("Abort parse failed");
             snapshot.RefreshedAt = DateTimeOffset.Now;
             snapshot.Error = null;
-            snapshot.Weekly.Remaining = 19;
+            snapshot.Weekly.Remaining = 0;
             snapshot.ResetCreditsAvailable = 2;
             deliveredUntil = null;
             tiboEvent = null;
             if (FormatRightStatus() != "可重置 ×2") throw new Exception("Reset opportunity label failed");
             RebuildFrame(false);
             frame.Save(Path.Combine(output, "reset-available.png"));
-            snapshot.Weekly.Remaining = 20;
+            snapshot.Weekly.Remaining = 1;
             if (FormatRightStatus() != String.Empty) throw new Exception("Reset threshold boundary failed");
-            snapshot.Weekly.Remaining = 19;
+            snapshot.Weekly.Remaining = 0;
             snapshot.ResetCreditsAvailable = 0;
             if (FormatRightStatus() != String.Empty) throw new Exception("Zero reset credit should stay hidden");
             snapshot.ResetCreditsAvailable = 2;
+            snapshot.Weekly.Remaining = 15;
             tiboEvent = new TiboEvent { TargetAt = DateTimeOffset.Now.AddHours(1) };
             if (!FormatRightStatus().StartsWith("Tibo", StringComparison.Ordinal)) throw new Exception("Tibo priority failed");
             tiboEvent = null;
@@ -666,11 +666,73 @@ namespace KleeCodexQuotaWidget
             afterReset.Weekly.Remaining = 100;
             DetectDelivery(afterReset);
             if (FormatRightStatus() != "额度已恢复") throw new Exception("Credit recovery detection failed");
+            snapshot = afterReset;
             RebuildFrame(false);
             frame.Save(Path.Combine(output, "reset-restored.png"));
             var parsed = CodexRateLimitReader.ParseForVerification("{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":25,\"windowDurationMins\":300},\"secondary\":{\"usedPercent\":82,\"windowDurationMins\":10080}},\"rateLimitResetCredits\":{\"availableCount\":3,\"credits\":[]}}}");
             if (parsed.ResetCreditsAvailable != 3 || parsed.Weekly.Remaining != 18) throw new Exception("Reset credit parser failed");
-            File.WriteAllText(Path.Combine(output, "result.txt"), "PASS: task states, no quota animation repaint, stale values, reset threshold, reset count, state priority, credit recovery, app-server parser");
+            VerifyPriorityAndAlpha(output);
+            File.WriteAllText(Path.Combine(output, "result.txt"), "PASS: task states, unchanged quota animation pixels, priority matrix, threshold boundaries, future dates, stale data, recovery once, alpha surface, theme and DPI rendering, app-server parser");
+        }
+
+        private void VerifyPriorityAndAlpha(string output)
+        {
+            deliveredUntil = null; tiboEvent = null;
+            snapshot = new UsageSnapshot { RefreshedAt=DateTimeOffset.Now };
+            snapshot.FiveHour.ResetsAt = DateTimeOffset.Now.AddHours(2);
+            snapshot.Weekly.ResetsAt = DateTimeOffset.Now.AddDays(3);
+            int[,] rows = {{50,80,0,0},{8,80,0,1},{8,15,2,1},{8,1,2,1},{8,0,2,2},{8,0,0,3},{50,0,2,2},{50,0,0,3},{10,80,2,0},{11,80,0,0}};
+            for (int i=0; i<rows.GetLength(0); i++)
+            {
+                snapshot.FiveHour.Remaining=rows[i,0]; snapshot.Weekly.Remaining=rows[i,1]; snapshot.ResetCreditsAvailable=rows[i,2];
+                string expected = rows[i,3]==0 ? "" : rows[i,3]==1 ? FormatResetTime(snapshot.FiveHour,false) : rows[i,3]==2 ? "可重置 ×2" : FormatResetTime(snapshot.Weekly,true);
+                if (FormatRightStatus()!=expected) throw new Exception("Priority matrix row " + i);
+            }
+            snapshot.FiveHour.Remaining=9; snapshot.Weekly.Remaining=80;
+            snapshot.FiveHour.ResetsAt=null;
+            if (FormatRightStatus()!="") throw new Exception("Missing time");
+            snapshot.FiveHour.ResetsAt=DateTimeOffset.Now.AddMinutes(-1);
+            if (FormatRightStatus()!="") throw new Exception("Past time");
+            snapshot.FiveHour.ResetsAt=new DateTimeOffset(DateTime.Today.AddDays(1).AddHours(1));
+            if (!FormatRightStatus().Contains("明天")) throw new Exception("Midnight");
+            snapshot.Error="offline";
+            if (FormatRightStatus()!="") throw new Exception("Stale status");
+            snapshot.Error=null; snapshot.Weekly.Remaining=0; snapshot.ResetCreditsAvailable=null;
+            if (!FormatRightStatus().StartsWith("7d")) throw new Exception("Unknown credit count");
+            tiboEvent=new TiboEvent { TargetAt=DateTimeOffset.Now.AddHours(1) };
+            if (!FormatRightStatus().StartsWith("7d")) throw new Exception("Weekly must outrank Tibo");
+            snapshot.Weekly.Remaining=80;
+            if (!FormatRightStatus().StartsWith("Tibo")) throw new Exception("Future Tibo priority");
+            tiboEvent.TargetAt=DateTimeOffset.Now.AddMinutes(-1); snapshot.FiveHour.Remaining=0;
+            if (!FormatRightStatus().StartsWith("5h")) throw new Exception("Exhausted five hour priority");
+            tiboEvent=null;
+            if (IncreasedSubstantially(100,100) || IncreasedSubstantially(100,98)) throw new Exception("False recovery");
+            snapshot.FiveHour.Remaining=8; snapshot.Weekly.Remaining=0; snapshot.ResetCreditsAvailable=0;
+            for (int theme=0; theme<2; theme++)
+            {
+                background=theme==0 ? Color.FromArgb(32,32,32) : Color.FromArgb(243,243,243);
+                foreground=theme==0 ? Color.White : Color.FromArgb(28,28,28);
+                RebuildFrame(false);
+                if (frame.GetPixel(frame.Width-1,0).A!=0) throw new Exception("Opaque background");
+                for (int x=frame.Width-8; x<frame.Width; x++) for(int y=0;y<frame.Height;y++)
+                    if(frame.GetPixel(x,y).A!=0) throw new Exception("Text clipping");
+                foreach (float scale in new float[]{1f,1.25f,1.5f,2f})
+                using(var bitmap=new Bitmap((int)(frame.Width*scale),(int)(frame.Height*scale)))
+                {
+                    using(Graphics g=Graphics.FromImage(bitmap)) g.DrawImage(frame,new Rectangle(0,0,bitmap.Width,bitmap.Height));
+                    if(bitmap.GetPixel(bitmap.Width-1,0).A!=0) throw new Exception("Scaled alpha");
+                    bitmap.Save(Path.Combine(output,"transparent-"+theme+"-"+scale.ToString(CultureInfo.InvariantCulture)+".png"));
+                }
+            }
+            tiboEvent=new TiboEvent { TargetAt=DateTimeOffset.Now.AddMinutes(-1) };
+            beforeEventFiveHour=8; beforeEventWeekly=0;
+            var recovered=new UsageSnapshot {RefreshedAt=DateTimeOffset.Now};
+            recovered.FiveHour.Remaining=100; recovered.Weekly.Remaining=100;
+            DetectDelivery(recovered); DateTimeOffset? deadline=deliveredUntil;
+            snapshot=recovered; DetectDelivery(recovered);
+            if(deliveredUntil!=deadline) throw new Exception("Recovery extended on poll");
+            recovered.Weekly.Remaining=0; DetectDelivery(recovered);
+            if(deliveredUntil.HasValue) throw new Exception("Recovery hides exhaustion");
         }
 
         private void SetTaskState(CodexTaskState next)
@@ -691,11 +753,12 @@ namespace KleeCodexQuotaWidget
             Rectangle area = new Rectangle(4, 0, StatusExtraWidth + 2, WidgetHeight);
             using (Graphics graphics = Graphics.FromImage(frame))
             {
-                using (var brush = new SolidBrush(background)) graphics.FillRectangle(brush, area);
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                using (var brush = new SolidBrush(Color.Transparent)) graphics.FillRectangle(brush, area);
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
                 DrawStatusIcon(graphics);
             }
-            Invalidate(new Rectangle((int)(area.X * displayScale), 0,
-                (int)Math.Ceiling(area.Width * displayScale), Height), false);
+            PresentFrame();
         }
 
         private void QueueActivityRefresh()
@@ -734,7 +797,6 @@ namespace KleeCodexQuotaWidget
                 {
                     beforeEventFiveHour = snapshot.FiveHour.Remaining;
                     beforeEventWeekly = snapshot.Weekly.Remaining;
-                    deliveredUntil = null;
                 }
                 tiboEvent = next;
             }
@@ -766,12 +828,16 @@ namespace KleeCodexQuotaWidget
                                IncreasedSubstantially(beforeEventWeekly, next.Weekly.Remaining);
 
             if (creditRestored || tiboRestored)
+            {
                 deliveredUntil = DateTimeOffset.Now.AddMinutes(5);
+                if (tiboRestored) { beforeEventFiveHour = null; beforeEventWeekly = null; }
+            }
+            if (next.FiveHour.Remaining == 0 || next.Weekly.Remaining == 0) deliveredUntil = null;
         }
 
         private static bool IncreasedSubstantially(int? before, int? after)
         {
-            return before.HasValue && after.HasValue &&
+            return before.HasValue && after.HasValue && after.Value > before.Value &&
                    (after.Value >= 98 || after.Value - before.Value >= 20);
         }
 
@@ -779,7 +845,7 @@ namespace KleeCodexQuotaWidget
         {
             if (frame == null)
                 RebuildFrame(false);
-            if (frame != null) e.Graphics.DrawImage(frame, ClientRectangle);
+            if (frame != null) PresentFrame();
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
@@ -803,13 +869,29 @@ namespace KleeCodexQuotaWidget
             Bitmap previous = frame;
             frame = next;
             if (previous != null) previous.Dispose();
-            if (requestPaint) Invalidate(false);
+            paintedRightStatus = FormatRightStatus();
+            if (requestPaint) PresentFrame();
+        }
+
+        private void PresentFrame()
+        {
+            if (frame == null || !IsHandleCreated || !Visible) return;
+            using (var scaled = new Bitmap(Math.Max(1, (int)Math.Round(frame.Width * displayScale)),
+                Math.Max(1, (int)Math.Round(frame.Height * displayScale)), System.Drawing.Imaging.PixelFormat.Format32bppPArgb))
+            {
+                using (Graphics g = Graphics.FromImage(scaled))
+                {
+                    g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                    g.DrawImage(frame, new Rectangle(0, 0, scaled.Width, scaled.Height));
+                }
+                AlphaWindow.Present(Handle, scaled, Left, Top);
+            }
         }
 
         private void PaintFrame(Graphics graphics)
         {
-            graphics.Clear(background);
-            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            graphics.Clear(Color.Transparent);
+            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
             string five = FormatPercent(snapshot.FiveHour.Remaining);
             string weekly = FormatPercent(snapshot.Weekly.Remaining);
@@ -854,8 +936,10 @@ namespace KleeCodexQuotaWidget
             {
                 saved = graphics.Save();
                 graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (var brush = new SolidBrush(background))
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                using (var brush = new SolidBrush(Color.Transparent))
                     graphics.FillEllipse(brush, new Rectangle(19, 19, 10, 10));
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
                 using (var brush = new SolidBrush(Color.FromArgb(45, 190, 105)))
                     graphics.FillEllipse(brush, new Rectangle(20, 20, 8, 8));
                 using (var pen = new Pen(Color.White, 1.1f))
@@ -870,7 +954,9 @@ namespace KleeCodexQuotaWidget
             {
                 saved = graphics.Save();
                 graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (var brush = new SolidBrush(background)) graphics.FillEllipse(brush, 19, 19, 10, 10);
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                using (var brush = new SolidBrush(Color.Transparent)) graphics.FillEllipse(brush, 19, 19, 10, 10);
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
                 if (taskState == CodexTaskState.Waiting)
                 {
                     using (var brush = new SolidBrush(Color.FromArgb(232, 173, 69))) graphics.FillEllipse(brush, 21, 21, 6, 6);
@@ -883,38 +969,62 @@ namespace KleeCodexQuotaWidget
 
         private void DrawText(Graphics g, string value, Font font, Color color, ref int x)
         {
-            Size size = TextRenderer.MeasureText(g, value, font, new Size(Int32.MaxValue, WidgetHeight),
-                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-            int y = (WidgetHeight - size.Height) / 2;
-            TextRenderer.DrawText(g, value, font, new Point(x, y), color, background,
-                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-            x += size.Width;
+            using (var format = (StringFormat)StringFormat.GenericTypographic.Clone())
+            using (var brush = new SolidBrush(color))
+            {
+                format.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces;
+                SizeF size = g.MeasureString(value, font, Int32.MaxValue, format);
+                g.DrawString(value, font, brush, new PointF(x, (WidgetHeight - size.Height) / 2f), format);
+                x += (int)Math.Ceiling(size.Width);
+            }
         }
 
         private string FormatRightStatus()
         {
-            if (deliveredUntil.HasValue) return "额度已恢复";
+            if (deliveredUntil.HasValue && deliveredUntil.Value > DateTimeOffset.Now) return "额度已恢复";
+            bool fresh = !IsQuotaStale();
+            if (fresh && snapshot.Weekly.Remaining == 0)
+            {
+                if (snapshot.ResetCreditsAvailable > 0)
+                    return "可重置 ×" + snapshot.ResetCreditsAvailable.Value.ToString(CultureInfo.InvariantCulture);
+                return FormatResetTime(snapshot.Weekly, true);
+            }
             if (tiboEvent != null)
             {
                 TimeSpan left = tiboEvent.TargetAt - DateTimeOffset.Now;
-                if (left <= TimeSpan.Zero) return "Tibo 等待到账";
+                if (left <= TimeSpan.Zero)
+                {
+                    string urgent = fresh && snapshot.FiveHour.Remaining == 0 ? FormatResetTime(snapshot.FiveHour, false) : String.Empty;
+                    return String.IsNullOrEmpty(urgent) ? "Tibo 待确认" : urgent;
+                }
                 if (left.TotalDays >= 1)
                     return String.Format(CultureInfo.InvariantCulture, "Tibo {0}天 {1:00}:{2:00}:{3:00}",
                         (int)left.TotalDays, left.Hours, left.Minutes, left.Seconds);
                 return String.Format(CultureInfo.InvariantCulture, "Tibo {0:00}:{1:00}:{2:00}",
                     (int)left.TotalHours, left.Minutes, left.Seconds);
             }
-            if (!IsQuotaStale() && snapshot.Weekly.Remaining.HasValue && snapshot.Weekly.Remaining.Value < 20 &&
-                snapshot.ResetCreditsAvailable.HasValue && snapshot.ResetCreditsAvailable.Value > 0)
-                return "可重置 ×" + snapshot.ResetCreditsAvailable.Value.ToString(CultureInfo.InvariantCulture);
+            if (fresh && snapshot.FiveHour.Remaining < 10)
+                return FormatResetTime(snapshot.FiveHour, false);
             return String.Empty;
+        }
+
+        private static string FormatResetTime(LimitReading reading, bool weekly)
+        {
+            DateTimeOffset now = DateTimeOffset.Now;
+            if (!reading.ResetsAt.HasValue || reading.ResetsAt.Value <= now) return String.Empty;
+            DateTime reset = reading.ResetsAt.Value.LocalDateTime;
+            string prefix = weekly ? "7d " : "5h ";
+            string time = reset.ToString("HH:mm", CultureInfo.InvariantCulture);
+            if (!weekly && reset.Date == now.LocalDateTime.Date) return prefix + time + "恢复";
+            if (!weekly && reset.Date == now.LocalDateTime.Date.AddDays(1)) return prefix + "明天" + time + "恢复";
+            return prefix + reset.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture) + "恢复";
         }
 
         private int GetLogicalWidth()
         {
             string status = FormatRightStatus();
             if (String.IsNullOrEmpty(status)) return CompactWidth + StatusExtraWidth;
-            return (status.StartsWith("Tibo", StringComparison.Ordinal) ? CountdownWidth : StatusWidth) + StatusExtraWidth;
+            return (status.StartsWith("Tibo", StringComparison.Ordinal) || status.EndsWith("恢复", StringComparison.Ordinal) ? CountdownWidth : StatusWidth) + StatusExtraWidth;
         }
 
         private static string FormatPercent(int? value)
@@ -933,7 +1043,7 @@ namespace KleeCodexQuotaWidget
 
         private Color Muted()
         {
-            return Color.FromArgb(foreground.R, foreground.G, foreground.B).Blend(background, 0.45f);
+            return background.R > 128 ? Color.FromArgb(105, 105, 105) : Color.FromArgb(165, 165, 165);
         }
 
         private void ApplyTheme()
@@ -950,7 +1060,6 @@ namespace KleeCodexQuotaWidget
             catch { }
             background = light ? Color.FromArgb(243, 243, 243) : Color.FromArgb(32, 32, 32);
             foreground = light ? Color.FromArgb(28, 28, 28) : Color.FromArgb(245, 245, 245);
-            if (BackColor != background) BackColor = background;
         }
 
         private void UpdateWidth()
@@ -997,7 +1106,7 @@ namespace KleeCodexQuotaWidget
             Rectangle visibleBar = Rectangle.Intersect(chosen.Bounds, barBounds);
             bool barVisible = NativeMethods.IsWindowVisible(current) && visibleBar.Height > 4 && visibleBar.Width > 4;
             if (NativeMethods.IsWindowVisible(Handle) != barVisible) { if (barVisible) NativeMethods.ShowWindow(Handle, NativeMethods.SW_SHOWNOACTIVATE); else NativeMethods.ShowWindow(Handle, 0); }
-            if (!barVisible) return;
+            if (!barVisible) { logoInput.Hide(); return; }
             float scale = 1f;
             try { scale = Math.Max(1f, NativeMethods.GetDpiForWindow(current) / 96f); } catch { }
             if (displayScale != scale)
@@ -1023,21 +1132,22 @@ namespace KleeCodexQuotaWidget
                     wantedX, wantedY, Width, Height,
                     NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
             }
+            logoInput.Position(Handle, wantedX, wantedY, (int)Math.Round(30 * displayScale), Height);
         }
 
         private void OnWidgetMouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left) return;
             dragging = true;
-            dragStart = Cursor.Position;
+            dragStart = logoInput.PointToScreen(e.Location);
             dragOffsetStart = leftOffset;
-            Capture = true;
+            logoInput.Capture = true;
         }
 
         private void OnWidgetMouseMove(object sender, MouseEventArgs e)
         {
             if (!dragging) return;
-            leftOffset = Math.Max(0, dragOffsetStart + Cursor.Position.X - dragStart.X);
+            leftOffset = Math.Max(0, dragOffsetStart + logoInput.PointToScreen(e.Location).X - dragStart.X);
             AttachAndPosition();
         }
 
@@ -1045,7 +1155,7 @@ namespace KleeCodexQuotaWidget
         {
             if (!dragging) return;
             dragging = false;
-            Capture = false;
+            logoInput.Capture = false;
             SaveLeftOffset();
         }
 
@@ -1507,6 +1617,72 @@ namespace KleeCodexQuotaWidget
         }
     }
 
+    internal sealed class LogoInputWindow : Form
+    {
+        public LogoInputWindow()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            AutoScaleMode = AutoScaleMode.None;
+        }
+        protected override bool ShowWithoutActivation { get { return true; } }
+        protected override CreateParams CreateParams
+        {
+            get { var cp = base.CreateParams; cp.ExStyle |= 0x08080080; return cp; }
+        }
+        public void Position(IntPtr owner, int x, int y, int width, int height)
+        {
+            bool changed = !Visible || Left != x || Top != y || Width != width || Height != height;
+            if (!changed) return;
+            NativeMethods.SetOwner(Handle, owner);
+            using (var bitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb))
+            {
+                using (Graphics g = Graphics.FromImage(bitmap)) g.Clear(Color.FromArgb(1, 0, 0, 0));
+                AlphaWindow.Present(Handle, bitmap, x, y);
+            }
+            if (!Visible) Show();
+            NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, x, y, width, height,
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        }
+    }
+
+    internal static class AlphaWindow
+    {
+        [StructLayout(LayoutKind.Sequential)] private struct Point { public int X, Y; public Point(int x, int y) { X=x; Y=y; } }
+        [StructLayout(LayoutKind.Sequential)] private struct Size { public int Width, Height; public Size(int w, int h) { Width=w; Height=h; } }
+        [StructLayout(LayoutKind.Sequential, Pack=1)] private struct Blend { public byte Operation, Flags, Alpha, Format; }
+        [DllImport("user32.dll", SetLastError=true)] private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr dst, ref Point location, ref Size size, IntPtr src, ref Point origin, int key, ref Blend blend, int flags);
+        [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
+        [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+        [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+        [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+        public static void Present(IntPtr hwnd, Bitmap bitmap, int x, int y)
+        {
+            IntPtr screen = GetDC(IntPtr.Zero), dc = IntPtr.Zero, handle = IntPtr.Zero, old = IntPtr.Zero;
+            try
+            {
+                dc = CreateCompatibleDC(screen);
+                handle = bitmap.GetHbitmap(Color.FromArgb(0));
+                old = SelectObject(dc, handle);
+                var location = new Point(x, y); var origin = new Point(0, 0);
+                var size = new Size(bitmap.Width, bitmap.Height);
+                var blend = new Blend { Alpha=255, Format=1 };
+                if (!UpdateLayeredWindow(hwnd, screen, ref location, ref size, dc, ref origin, 0, ref blend, 2))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally
+            {
+                if (old != IntPtr.Zero) SelectObject(dc, old);
+                if (handle != IntPtr.Zero) DeleteObject(handle);
+                if (dc != IntPtr.Zero) DeleteDC(dc);
+                if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
+            }
+        }
+    }
+
     internal static class NativeMethods
     {
         [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint command);
@@ -1611,9 +1787,19 @@ namespace KleeCodexQuotaWidget
                     result.Weekly.Remaining = Convert.ToInt32(weekly, CultureInfo.InvariantCulture);
                 if (data.TryGetValue("resetCreditsAvailable", out resetCredits) && resetCredits != null)
                     result.ResetCreditsAvailable = Math.Max(0, Convert.ToInt32(resetCredits, CultureInfo.InvariantCulture));
+                result.FiveHour.ResetsAt = ReadCachedTime(data, "fiveHourResetsAt");
+                result.Weekly.ResetsAt = ReadCachedTime(data, "weeklyResetsAt");
                 return result;
             }
             catch { return empty; }
+        }
+
+        private static DateTimeOffset? ReadCachedTime(Dictionary<string, object> data, string name)
+        {
+            object value; DateTimeOffset parsed;
+            return data.TryGetValue(name, out value) && value != null &&
+                DateTimeOffset.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out parsed) ? (DateTimeOffset?)parsed : null;
         }
 
         public static void Save(UsageSnapshot snapshot)
@@ -1626,6 +1812,8 @@ namespace KleeCodexQuotaWidget
                 data["fiveHour"] = snapshot.FiveHour.Remaining;
                 data["weekly"] = snapshot.Weekly.Remaining;
                 data["resetCreditsAvailable"] = snapshot.ResetCreditsAvailable;
+                data["fiveHourResetsAt"] = snapshot.FiveHour.ResetsAt.HasValue ? snapshot.FiveHour.ResetsAt.Value.ToString("o", CultureInfo.InvariantCulture) : null;
+                data["weeklyResetsAt"] = snapshot.Weekly.ResetsAt.HasValue ? snapshot.Weekly.ResetsAt.Value.ToString("o", CultureInfo.InvariantCulture) : null;
                 data["refreshedAt"] = snapshot.RefreshedAt.ToString("o", CultureInfo.InvariantCulture);
                 File.WriteAllText(CachePath, new JavaScriptSerializer().Serialize(data));
             }
