@@ -30,8 +30,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$desktop=[Environment]::GetFolderPath('DesktopDirectory'); $shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktop 'Codex Quota Widget.lnk')); $shortcut.TargetPath=$env:TARGET_EXE; $shortcut.WorkingDirectory=$env:INSTALL_DIR; $shortcut.IconLocation=$env:TARGET_EXE + ',0'; $shortcut.Description='Start Klee Codex Quota Widget'; $shortcut.Save()"
+if errorlevel 1 (
+  echo [WARNING] The app was installed, but the desktop shortcut could not be created.
+)
+
 start "" "%TARGET_EXE%"
 echo.
 echo Installed successfully. The widget will start automatically with Windows.
+echo A desktop shortcut named Codex Quota Widget was created.
 echo Location: %TARGET_EXE%
 pause

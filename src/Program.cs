@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Windows 11 taskbar widget for Codex quota and task status")]
 [assembly: System.Reflection.AssemblyCompany("Klee")]
 [assembly: System.Reflection.AssemblyProduct("Klee Codex Quota Widget")]
-[assembly: System.Reflection.AssemblyVersion("1.4.2.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.2.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.5.0.0")]
 
 namespace KleeCodexQuotaWidget
 {
@@ -300,6 +300,8 @@ namespace KleeCodexQuotaWidget
         private bool verifyingMenu;
         private readonly ToolStripMenuItem startupItem;
         private readonly ToolStripMenuItem freshnessItem;
+        private readonly NotifyIcon trayIcon;
+        private readonly Icon trayIconImage;
         private UsageSnapshot snapshot = UsageCache.Load();
         private TiboEvent tiboEvent;
         private DateTimeOffset? quotaNextPoll;
@@ -426,6 +428,18 @@ namespace KleeCodexQuotaWidget
             };
             logoInput.ContextMenuStrip = menu;
 
+            try
+            {
+                trayIconImage = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                if (trayIconImage == null) trayIconImage = (Icon)SystemIcons.Application.Clone();
+            }
+            catch { trayIconImage = (Icon)SystemIcons.Application.Clone(); }
+            trayIcon = new NotifyIcon();
+            trayIcon.Icon = trayIconImage;
+            trayIcon.Text = "Codex 额度组件";
+            trayIcon.ContextMenuStrip = menu;
+            trayIcon.DoubleClick += delegate { ForceRefresh(); };
+
             uiTimer = new System.Windows.Forms.Timer();
             uiTimer.Interval = 250;
             uiTimer.Tick += UiTick;
@@ -460,6 +474,7 @@ namespace KleeCodexQuotaWidget
             ApplyTheme();
             AttachAndPosition();
             RebuildFrame();
+            trayIcon.Visible = true;
             StartActivityWatchers();
             uiTimer.Start();
             ForceRefresh();
@@ -476,6 +491,9 @@ namespace KleeCodexQuotaWidget
             knotLogo.Dispose();
             logoInput.Dispose();
             if (frame != null) frame.Dispose();
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            trayIconImage.Dispose();
             menu.Dispose();
             if(menuFont != null) menuFont.Dispose();
             animationTimer.Dispose();
@@ -907,6 +925,10 @@ namespace KleeCodexQuotaWidget
             VerifyPriorityAndAlpha(output);
             VerifyCustomScale(output);
             VerifyMenu(output);
+            snapshot.FiveHour.Remaining = 76; snapshot.Weekly.Remaining = 42;
+            taskState = CodexTaskState.Running; UpdateTrayText();
+            if (!trayIcon.Text.Contains("5h 76%") || !trayIcon.Text.Contains("7d 42%") || !trayIcon.Text.Contains("任务运行中"))
+                throw new Exception("Tray tooltip failed");
             File.WriteAllText(Path.Combine(output, "result.txt"), "PASS: task states, unchanged quota animation pixels, priority matrix, threshold boundaries, future dates, stale data, recovery once, alpha surface, theme and DPI rendering, app-server parser");
         }
 
@@ -1197,7 +1219,21 @@ namespace KleeCodexQuotaWidget
             frame = next;
             if (previous != null) previous.Dispose();
             paintedRightStatus = FormatRightStatus();
+            UpdateTrayText();
             if (requestPaint) PresentFrame();
+        }
+
+        private void UpdateTrayText()
+        {
+            if (trayIcon == null) return;
+            string five = FormatPercent(snapshot.FiveHour.Remaining);
+            string weekly = FormatPercent(snapshot.Weekly.Remaining);
+            string state = taskState == CodexTaskState.Running ? " · 任务运行中" :
+                taskState == CodexTaskState.Completed ? " · 任务已完成" :
+                taskState == CodexTaskState.Waiting ? " · 等待输入" :
+                taskState == CodexTaskState.Interrupted ? " · 任务已中断" : String.Empty;
+            string value = "Codex 额度 · 5h " + five + " · 7d " + weekly + state;
+            trayIcon.Text = value.Length > 63 ? value.Substring(0, 63) : value;
         }
 
         private void PresentFrame()

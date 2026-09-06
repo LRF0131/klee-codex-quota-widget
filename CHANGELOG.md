@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 - 2026-09-06
+
+- Add a persistent notification-area icon while the widget is running.
+- Show current 5h/7d quota and task state in the tray tooltip.
+- Open the existing menu from the tray icon and refresh on double-click.
+- Create a desktop restart shortcut during installation and remove it during uninstall.
+
 ## 1.4.2 - 2026-09-06
 
 - Fix clipped scale percentage, reset button and hint at 175% DPI.

@@ -7,6 +7,7 @@ set "TARGET_EXE=%INSTALL_DIR%\KleeCodexQuotaWidget.exe"
 
 taskkill /IM KleeCodexQuotaWidget.exe /F >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "KleeCodexQuotaWidget" /f >nul 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$shortcut=Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Codex Quota Widget.lnk'; if(Test-Path -LiteralPath $shortcut){Remove-Item -LiteralPath $shortcut -Force}" >nul 2>&1
 if exist "%TARGET_EXE%" del /F /Q "%TARGET_EXE%"
 
 echo.

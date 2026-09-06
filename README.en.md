@@ -25,6 +25,7 @@ It reads server-reported quota for the Codex account currently signed in on your
 - Shows a Tibo countdown only after a clear announcement with a specific future reset time. Predictions, vague statements, and community guesses are ignored.
 - Uses per-pixel transparency so the native Windows 11 taskbar color and transparency remain visible.
 - Supports light and dark themes, DPI scaling, multiple monitors, taskbar auto-hide, and per-user startup.
+- Keeps an icon in the Windows notification area while running and installs a desktop shortcut for manual restart.
 - Keeps the latest server values during network failures and mutes data that has not refreshed for more than two minutes.
 
 | Reset available | Recovery confirmed |
@@ -44,7 +45,7 @@ The on-screen status text is currently Chinese. English UI localization is not y
 
 1. Download `KleeCodexQuotaWidget-...zip` from the [latest Release](https://github.com/LRF0131/klee-codex-quota-widget/releases/latest).
 2. Extract the entire ZIP. Do not run files from inside the archive.
-3. Double-click `Install.cmd`. The widget starts immediately and is added to startup for the current Windows user.
+3. Double-click `Install.cmd`. The widget starts immediately, is added to startup for the current Windows user, and creates a `Codex Quota Widget` shortcut in the actual Windows desktop folder.
 
 Installation path:
 
@@ -53,6 +54,16 @@ Installation path:
 ```
 
 To update, extract the new package and run its `Install.cmd` again. Run `Uninstall.cmd` to remove the program and startup entry. Local quota cache and logs are kept in the installation directory and may be removed manually.
+
+## Tray icon and manual restart
+
+- While the app is running, a Codex icon appears in the notification area on the right side of the taskbar. Check the hidden-icons panel if Windows does not show it directly.
+- Hover to see current `5h`/`7d` quota and task state. Double-click to refresh, or right-click for the full menu.
+- If the widget disappears or exits unexpectedly, double-click the `Codex Quota Widget` desktop shortcut to start it again.
+- If that shortcut has been deleted, run `%LOCALAPPDATA%\KleeCodexQuotaWidget\KleeCodexQuotaWidget.exe` directly.
+- Windows may place a new icon in the overflow area. Use the “Other system tray icons” setting if you want it always visible.
+
+The uninstaller removes startup, the executable, and the desktop shortcut. Quota cache and logs remain available for troubleshooting.
 
 Release binaries are not commercially code-signed, so Windows may display an “Unknown publisher” warning. Compare the download against the SHA-256 file attached to the Release. Windows Defender does not need to be disabled.
 
