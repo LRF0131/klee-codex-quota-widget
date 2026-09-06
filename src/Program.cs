@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Windows 11 taskbar widget for Codex quota and task status")]
 [assembly: System.Reflection.AssemblyCompany("Klee")]
 [assembly: System.Reflection.AssemblyProduct("Klee Codex Quota Widget")]
-[assembly: System.Reflection.AssemblyVersion("1.4.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.2.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.2.0")]
 
 namespace KleeCodexQuotaWidget
 {
@@ -30,9 +30,16 @@ namespace KleeCodexQuotaWidget
             try { NativeMethods.SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
             if (args.Length == 2 && args[0] == "--verify-status")
             {
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                using (var form = new QuotaForm()) form.VerifyStatus(args[1]);
+                try { using (var form = new QuotaForm()) form.VerifyStatus(args[1]); }
+                catch(Exception ex)
+                {
+                    Directory.CreateDirectory(args[1]);
+                    File.WriteAllText(Path.Combine(args[1],"failure.txt"),ex.ToString());
+                    Environment.ExitCode = 1;
+                }
                 return;
             }
             bool created;
@@ -46,9 +53,104 @@ namespace KleeCodexQuotaWidget
         }
     }
 
+    // This host owns its layout. ToolStrip's automatic DPI scaling must not leave
+    // pixel-sized children behind when only the inherited font changes.
+    internal sealed class ScalePanel : Panel
+    {
+        internal readonly Label Caption = new Label { AutoSize = false };
+        internal readonly Label Hint = new Label { AutoSize = false, Text = "50% – 200% · 自动适配任务栏" };
+        internal readonly Button Reset = new Button { Text = "恢复默认", FlatStyle = FlatStyle.Flat };
+        internal readonly ScaleSlider Slider = new ScaleSlider { AccessibleName = "界面缩放百分比" };
+        private float scale = 1f;
+        private bool arranging;
+        internal ScalePanel(int value)
+        {
+            Margin = Padding.Empty;
+            Reset.FlatAppearance.BorderSize = 0;
+            Slider.Value = value;
+            Caption.Text = "界面缩放   " + value + "%";
+            Controls.AddRange(new Control[] { Caption, Reset, Slider, Hint });
+            Slider.ValueChanged += delegate { Caption.Text = "界面缩放   " + Slider.Value + "%"; };
+            Reset.Click += delegate { Slider.Value = 100; };
+        }
+        internal void Arrange(float dpiScale, int width)
+        {
+            if (arranging) return;
+            arranging = true;
+            try
+            {
+                scale = dpiScale;
+                int pad = Math.Max(6, (int)Math.Ceiling(10 * scale));
+                int gap = Math.Max(4, (int)Math.Ceiling(8 * scale));
+                int inner = Math.Max(1, width - pad * 2);
+                Size caption = TextRenderer.MeasureText("界面缩放   200%", Font);
+                Size reset = TextRenderer.MeasureText(Reset.Text, Font);
+                int buttonWidth = reset.Width + pad * 2;
+                int rowHeight = Math.Max(caption.Height, reset.Height) + gap;
+                int y = pad;
+                if (caption.Width + buttonWidth + gap <= inner)
+                {
+                    Caption.SetBounds(pad,y,inner-buttonWidth-gap,rowHeight);
+                    Reset.SetBounds(width-pad-buttonWidth,y,buttonWidth,rowHeight);
+                    y += rowHeight + gap;
+                }
+                else
+                {
+                    Size wrapped = TextRenderer.MeasureText(Caption.Text, Font, new Size(inner,Int32.MaxValue), TextFormatFlags.WordBreak);
+                    Caption.SetBounds(pad,y,inner,wrapped.Height+gap);
+                    y += Caption.Height;
+                    Reset.SetBounds(pad,y,Math.Min(inner,buttonWidth),rowHeight);
+                    y += rowHeight + gap;
+                }
+                Slider.UiScale = scale;
+                Slider.SetBounds(pad,y,inner,Math.Max(rowHeight,(int)Math.Ceiling(30*scale)));
+                y += Slider.Height + gap;
+                Size hint = TextRenderer.MeasureText(Hint.Text, Font, new Size(inner,Int32.MaxValue), TextFormatFlags.WordBreak);
+                Hint.SetBounds(pad,y,inner,hint.Height+gap);
+                Size = new Size(width,Hint.Bottom+pad);
+            }
+            finally { arranging = false; }
+        }
+        protected override void OnFontChanged(EventArgs e)
+        {
+            base.OnFontChanged(e);
+            if (Slider != null && Width > 0) Arrange(scale,Width);
+        }
+        internal void VerifyLayout()
+        {
+            foreach (Control c in Controls)
+                if (!ClientRectangle.Contains(c.Bounds)) throw new Exception("Scale control outside panel: " + c.GetType().Name);
+            if (Caption.Bounds.IntersectsWith(Reset.Bounds) || Reset.Bottom > Slider.Top || Slider.Bottom > Hint.Top)
+                throw new Exception("Scale controls overlap");
+            foreach (Label label in new[] { Caption, Hint })
+            {
+                Size needed = TextRenderer.MeasureText(label.Text,Font,new Size(label.Width,Int32.MaxValue),TextFormatFlags.WordBreak);
+                if (needed.Height > label.Height) throw new Exception("Scale label clipped: " + label.Text);
+            }
+            Size resetSize=TextRenderer.MeasureText(Reset.Text,Font);
+            if (resetSize.Height > Reset.Height || resetSize.Width > Reset.Width) throw new Exception("Reset button clipped");
+        }
+    }
+
+    internal sealed class AdaptiveMenu : ContextMenuStrip
+    {
+        internal event EventHandler MonitorDpiChanged;
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg == 0x02E0 && IsHandleCreated && !IsDisposed)
+                BeginInvoke((MethodInvoker)delegate {
+                    if (!IsDisposed && MonitorDpiChanged != null) MonitorDpiChanged(this,EventArgs.Empty);
+                });
+        }
+    }
+
+
     internal sealed class ScaleSlider : Control
     {
         private int value = 100;
+        internal float UiScale = 1f;
+        private int Inset { get { return Math.Max(4,(int)Math.Ceiling(12*UiScale)); } }
         public event EventHandler ValueChanged;
         public int Value { get { return value; } set {
             int next = Math.Max(50, Math.Min(200,value));
@@ -62,7 +164,17 @@ namespace KleeCodexQuotaWidget
                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
             TabStop = true; AccessibleRole = AccessibleRole.Slider;
         }
-        private void SetFromX(int x) { Value = 50 + (int)Math.Round(150.0 * (x-12) / Math.Max(1,Width-24)); }
+        private void SetFromX(int x) { Value = 50 + (int)Math.Round(150.0 * (x-Inset) / Math.Max(1,Width-Inset*2)); }
+        internal void VerifyInput()
+        {
+            OnMouseDown(new MouseEventArgs(MouseButtons.Left,1,Inset,Height/2,0));
+            if(Value!=50) throw new Exception("Slider left endpoint");
+            OnMouseMove(new MouseEventArgs(MouseButtons.Left,0,Width-Inset,Height/2,0));
+            OnMouseUp(new MouseEventArgs(MouseButtons.Left,1,Width-Inset,Height/2,0));
+            if(Value!=200 || Capture) throw new Exception("Slider right endpoint/capture");
+            OnKeyDown(new KeyEventArgs(Keys.Left));
+            if(Value!=199) throw new Exception("Slider keyboard");
+        }
         protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if(e.Button==MouseButtons.Left) { Focus(); Capture=true; SetFromX(e.X); } }
         protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if(Capture) SetFromX(e.X); }
         protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if(e.Button==MouseButtons.Left) Capture=false; }
@@ -77,14 +189,15 @@ namespace KleeCodexQuotaWidget
         {
             base.OnPaint(e);
             var g=e.Graphics; g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            int y=Height/2; float x=12+(Width-24)*(Value-50)/150f;
-            using(var track=new Pen(BackColor.R>128 ? Color.FromArgb(200,200,200) : Color.FromArgb(85,85,85),4))
-            using(var fill=new Pen(Color.FromArgb(80,160,245),4))
+            int y=Height/2; float x=Inset+(Width-Inset*2)*(Value-50)/150f;
+            float radius=7*UiScale;
+            using(var track=new Pen(BackColor.R>128 ? Color.FromArgb(200,200,200) : Color.FromArgb(85,85,85),4*UiScale))
+            using(var fill=new Pen(Color.FromArgb(80,160,245),4*UiScale))
             using(var thumb=new SolidBrush(Color.FromArgb(100,180,255)))
             {
                 track.StartCap=track.EndCap=fill.StartCap=fill.EndCap=System.Drawing.Drawing2D.LineCap.Round;
-                g.DrawLine(track,12,y,Width-12,y); g.DrawLine(fill,12,y,x,y);
-                g.FillEllipse(thumb,x-7,y-7,14,14);
+                g.DrawLine(track,Inset,y,Width-Inset,y); g.DrawLine(fill,Inset,y,x,y);
+                g.FillEllipse(thumb,x-radius,y-radius,radius*2,radius*2);
             }
             if(Focused) ControlPaint.DrawFocusRectangle(g,ClientRectangle);
         }
@@ -180,7 +293,11 @@ namespace KleeCodexQuotaWidget
 
         private readonly System.Windows.Forms.Timer uiTimer;
         private readonly System.Windows.Forms.Timer animationTimer;
-        private readonly ContextMenuStrip menu;
+        private readonly AdaptiveMenu menu;
+        private ScalePanel scalePanel;
+        private ToolStripControlHost scaleHost;
+        private Font menuFont;
+        private bool verifyingMenu;
         private readonly ToolStripMenuItem startupItem;
         private readonly ToolStripMenuItem freshnessItem;
         private UsageSnapshot snapshot = UsageCache.Load();
@@ -253,8 +370,7 @@ namespace KleeCodexQuotaWidget
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 
-            menu = new ContextMenuStrip();
-            menu.Font = new Font("Segoe UI", 10f);
+            menu = new AdaptiveMenu();
             menu.Padding = new Padding(8);
             menu.ShowImageMargin = false;
             menu.ShowCheckMargin = true;
@@ -263,7 +379,8 @@ namespace KleeCodexQuotaWidget
             freshnessItem.Enabled = false;
             menu.Items.Add(freshnessItem);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(new ToolStripControlHost(BuildScaleControl()) { Margin = Padding.Empty, Padding = Padding.Empty });
+            scaleHost = new ToolStripControlHost(BuildScaleControl()) { Margin = Padding.Empty, Padding = Padding.Empty, AutoSize = false };
+            menu.Items.Add(scaleHost);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("↻   立即刷新", null, delegate { ForceRefresh(); });
             var displays = new ToolStripMenuItem("显示位置");
@@ -292,16 +409,19 @@ namespace KleeCodexQuotaWidget
             menu.Items.Add("退出", null, delegate { Close(); });
             foreach (ToolStripItem item in menu.Items)
                 if (item is ToolStripMenuItem) item.Padding = new Padding(10, 6, 10, 6);
-            menu.Opening += delegate { UpdateFreshnessText(); ApplyTheme(); StyleMenu(menu); startupItem.Checked = IsStartupEnabled(); };
+            menu.Opening += delegate { UpdateFreshnessText(); ApplyTheme(); PrepareMenuForMonitor(false); startupItem.Checked = IsStartupEnabled(); };
+            menu.MonitorDpiChanged += delegate { if(menu.Visible && !verifyingMenu) PrepareMenuForMonitor(true); };
             menu.Closing += delegate(object sender, ToolStripDropDownClosingEventArgs e) {
                 if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && menu.GetItemAt(menu.PointToClient(Cursor.Position)) is ToolStripControlHost)
                     e.Cancel = true;
             };
             menu.Closed += delegate {
+                if (verifyingMenu) return;
                 try { using (var key = Registry.CurrentUser.CreateSubKey(SettingsKey))
                     key.SetValue("ScalePercent", userScalePercent, RegistryValueKind.DWord); } catch { }
             };
             menu.Opened += delegate {
+                if (!verifyingMenu) PrepareMenuForMonitor(true);
                 try { int corner = 2; WidgetMenuRenderer.DwmSetWindowAttribute(menu.Handle, 33, ref corner, 4); } catch { }
             };
             logoInput.ContextMenuStrip = menu;
@@ -357,6 +477,7 @@ namespace KleeCodexQuotaWidget
             logoInput.Dispose();
             if (frame != null) frame.Dispose();
             menu.Dispose();
+            if(menuFont != null) menuFont.Dispose();
             animationTimer.Dispose();
             base.OnFormClosed(e);
         }
@@ -791,33 +912,53 @@ namespace KleeCodexQuotaWidget
 
         private void VerifyMenu(string output)
         {
-            UpdateFreshnessText();
-            for (int theme = 0; theme < 2; theme++)
+            verifyingMenu = true;
+            int original = userScalePercent;
+            int cases = 0;
+            try
             {
-                background = theme == 0 ? Color.FromArgb(32,32,32) : Color.FromArgb(243,243,243);
-                StyleMenu(menu);
                 menu.Show(new Point(80,80));
                 Application.DoEvents();
-                foreach (ToolStripItem item in menu.Items)
+                PrepareMenuForMonitor(true);
+                menu.Refresh();
+                Application.DoEvents();
+                scalePanel.VerifyLayout();
+                foreach (int dpi in new[] { 96,120,144,168,192,216,240,288 })
+                foreach (int text in new[] { 100,125,150,200 })
+                foreach (int theme in new[] { 0,1 })
+                foreach (int width in new[] { 800,1920 })
                 {
-                    var host = item as ToolStripControlHost;
-                    if (host == null) continue;
-                    foreach (Control child in host.Control.Controls)
+                    background = theme == 0 ? Color.FromArgb(32,32,32) : Color.FromArgb(243,243,243);
+                    PrepareMenu(dpi/96f,text/100f,new Rectangle(0,0,width,1080));
+                    scalePanel.Slider.Value = 200;
+                    scalePanel.VerifyLayout();
+                    if (scalePanel.Size != scaleHost.Size) throw new Exception("Host/panel size mismatch");
+                    if (menu.Width > width || menu.Height > 1080) throw new Exception("Menu outside work area");
+                    scalePanel.Slider.VerifyInput();
+                    if (!menu.Visible) throw new Exception("Slider closed menu");
+                    scalePanel.Reset.PerformClick();
+                    if(userScalePercent != 100 || !menu.Visible) throw new Exception("Reset failed");
+                    if (text == 100 && width == 1920 && (dpi == 168 || dpi == 96 || dpi == 192))
+                    using (var bitmap = new Bitmap(menu.Width,menu.Height))
                     {
-                        var slider = child as ScaleSlider;
-                        if (slider == null) continue;
-                        int original = slider.Value;
-                        slider.Value = 80;
-                        if (userScalePercent != 80 || !menu.Visible) throw new Exception("Inline scale failed");
-                        slider.Value = original;
+                        menu.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
+                        bitmap.Save(Path.Combine(output,"menu-"+dpi+"-"+theme+".png"));
                     }
+                    cases++;
                 }
-                using (var bitmap = new Bitmap(menu.Width,menu.Height))
-                {
-                    menu.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
-                    bitmap.Save(Path.Combine(output,"menu-"+theme+".png"));
-                }
+                PrepareMenu(1f,1f,new Rectangle(0,0,1920,1080));
+                Size initial = scalePanel.Size;
+                PrepareMenu(1.75f,1f,new Rectangle(0,0,1920,1080));
+                PrepareMenu(1f,1f,new Rectangle(0,0,1920,1080));
+                if(scalePanel.Size != initial) throw new Exception("DPI round trip accumulated scaling");
+                File.WriteAllText(Path.Combine(output,"menu-result.txt"),
+                    "PASS: current-monitor menu opening and repaint; "+cases+" menu layouts; 96/120/144/168/192/216/240/288 DPI; text 100/125/150/200%; dark/light; widths 800/1920; slider mouse/keyboard, reset, host bounds, DPI round trip. Matrix uses simulated layout/rendering, not physical monitor testing.");
+            }
+            finally
+            {
+                scalePanel.Slider.Value = original;
                 menu.Close();
+                verifyingMenu = false;
             }
         }
 
@@ -1322,25 +1463,70 @@ namespace KleeCodexQuotaWidget
 
         private Control BuildScaleControl()
         {
-            var panel = new Panel { Size = new Size(290, 106), Margin = Padding.Empty };
-            var label = new Label { Text = "界面缩放   " + userScalePercent + "%", AutoSize = false };
-            label.SetBounds(12, 8, 180, 26);
-            var slider = new ScaleSlider { Value = userScalePercent,
-                AccessibleName = "界面缩放百分比" };
-            slider.SetBounds(8, 38, 272, 32);
-            var reset = new Button { Text = "恢复默认", FlatStyle = FlatStyle.Flat, TabStop = true };
-            reset.FlatAppearance.BorderSize = 0;
-            reset.SetBounds(204, 6, 80, 28);
-            var hint = new Label { Text = "50%  –  200%  ·  自动适配任务栏", AutoSize = false };
-            hint.SetBounds(12, 78, 270, 22);
-            slider.ValueChanged += delegate {
-                userScalePercent = slider.Value;
-                label.Text = "界面缩放   " + userScalePercent + "%";
-                AttachAndPosition();
+            scalePanel = new ScalePanel(userScalePercent);
+            scalePanel.Slider.ValueChanged += delegate {
+                userScalePercent = scalePanel.Slider.Value;
+                if (!verifyingMenu) AttachAndPosition();
             };
-            reset.Click += delegate { slider.Value = 100; };
-            panel.Controls.AddRange(new Control[] { label, slider, reset, hint });
-            return panel;
+            return scalePanel;
+        }
+
+        private void PrepareMenu(float dpiScale, float textScale, Rectangle workArea)
+        {
+            // Pixel fonts make this pass independent of the monitor that created the
+            // menu. Measure and assign every size from a fresh baseline on each open.
+            menu.SuspendLayout();
+            Font previous = menuFont;
+            menuFont = new Font("Segoe UI", 10f * 96f / 72f * dpiScale * textScale, FontStyle.Regular, GraphicsUnit.Pixel);
+            // Keep complete action labels on narrow work areas with large text.
+            int longest = 1;
+            foreach(ToolStripItem item in menu.Items)
+                if(item is ToolStripMenuItem) longest=Math.Max(longest,TextRenderer.MeasureText(item.Text,menuFont).Width);
+            int available = Math.Max(100,workArea.Width-(int)Math.Ceiling(80*dpiScale));
+            if(longest>available)
+            {
+                Font fitted = new Font(menuFont.FontFamily,menuFont.Size*available/longest,FontStyle.Regular,GraphicsUnit.Pixel);
+                menuFont.Dispose(); menuFont=fitted;
+            }
+            try
+            {
+                menu.Font = menuFont;
+                int pad = (int)Math.Ceiling(8 * dpiScale);
+                menu.Padding = new Padding(pad);
+                menu.MaximumSize = new Size(Math.Max(1,workArea.Width-8),Math.Max(1,workArea.Height-8));
+                int width = Math.Min((int)Math.Ceiling(310*dpiScale),Math.Max(1,workArea.Width-pad*6-40));
+                scalePanel.Font = menuFont;
+                scalePanel.Arrange(dpiScale,width);
+                scaleHost.AutoSize = false;
+                scaleHost.Size = scalePanel.Size;
+                foreach (ToolStripItem item in menu.Items)
+                {
+                    if (item is ToolStripMenuItem)
+                        item.Padding = new Padding((int)Math.Ceiling(10*dpiScale),(int)Math.Ceiling(5*dpiScale),
+                            (int)Math.Ceiling(10*dpiScale),(int)Math.Ceiling(5*dpiScale));
+                    var entry = item as ToolStripMenuItem;
+                    if (entry != null && entry.HasDropDownItems) entry.DropDown.Font = menuFont;
+                }
+                StyleMenu(menu);
+            }
+            finally { menu.ResumeLayout(true); if(previous != null) previous.Dispose(); }
+        }
+
+        private void PrepareMenuForMonitor(bool opened)
+        {
+            IntPtr source = opened ? menu.Handle : logoInput.Handle;
+            float dpi = 1f;
+            try { dpi = Math.Max(1f,NativeMethods.GetDpiForWindow(source)/96f); } catch { }
+            float text = 1f;
+            try { using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Accessibility"))
+                if(key!=null) text=Math.Max(1f,Math.Min(2.25f,Convert.ToSingle(key.GetValue("TextScaleFactor",100))/100f)); } catch { }
+            Rectangle work = Screen.FromHandle(source).WorkingArea;
+            PrepareMenu(dpi,text,work);
+            if(opened)
+            {
+                menu.Location = new Point(Math.Max(work.Left,Math.Min(menu.Left,work.Right-menu.Width)),
+                    Math.Max(work.Top,Math.Min(menu.Top,work.Bottom-menu.Height)));
+            }
         }
 
         private void StyleMenu(ToolStrip strip)

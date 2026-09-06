@@ -68,6 +68,18 @@ Only the Logo area receives mouse input:
 
 The separate Logo input layer uses `1/255` alpha so gaps inside the mark are still easy to click. Empty pixels in the visible display layer are fully transparent.
 
+## Menu scaling across PCs
+
+The context menu remeasures controls using the destination monitor DPI and Windows text size. The percentage, reset button, hint and slider are laid out together, with wrapping when needed. The menu is bounded by the monitor work area; on very narrow screens with large text, menu text is reduced to keep action names readable. Moving between monitors triggers a new layout. The widget's custom scale does not change menu size.
+
+Version 1.4.2 fixes clipping at 175% (168 DPI). These are simulated renders at 175% DPI and 100% text size:
+
+| Dark menu | Light menu |
+| --- | --- |
+| ![175% dark menu](docs/menu-175-dark.png) | ![175% light menu](docs/menu-175-light.png) |
+
+Menu verification covers 128 layouts: eight DPI levels from 100% to 300%, text sizes of 100%/125%/150%/200%, both themes and work-area widths of 800/1920 pixels. It checks slider input, reset, control bounds and a DPI round trip. The matrix uses simulated layout and rendering, with an additional opening/repaint check on the current PC. All physical monitors, Remote Desktop and third-party taskbar combinations have not been tested.
+
 ## Right-side status rules
 
 Only one right-side status is shown at a time. These are the most common quota combinations:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.2 - 2026-09-06
+
+- Fix clipped scale percentage, reset button and hint at 175% DPI.
+- Measure embedded controls using the actual font; relayout on menu opening and monitor DPI changes.
+- Scale slider drawing and hit coordinates together; wrap controls when space is limited.
+- Fit menu bounds to the monitor work area and long action labels to narrow screens.
+- Add 128 menu layout cases across DPI, text size, theme and width, plus input and DPI round-trip checks.
+- Self-test failures now write a report and return a nonzero exit code instead of showing an exception dialog.
+
 ## 1.4.1 - 2026-09-05
 
 - Embed a live scale slider and reset button directly in the right-click menu.
